@@ -1,0 +1,78 @@
+# ---------------------------------------------------------------
+# Music Library scripts
+# ---------------------------------------------------------------
+
+# Secrets: never commit API keys (e.g. LASTFM_API_KEY, AcoustID keys)
+.env
+.env.*
+!.env.example
+*.secret
+
+# Files the scripts generate
+no_readable_tag_error.log
+*.log
+Playlists/
+*.m3u
+*.m3u8
+
+# Music: keep audio and artwork out of the repository
+*.mp3
+*.flac
+*.m4a
+*.mp4
+*.ogg
+*.opus
+*.oga
+*.wav
+*.aif
+*.aiff
+*.wma
+*.ape
+*.wv
+*.jpg
+*.jpeg
+*.png
+
+# Leftover temp files from interrupted tag rewrites (".<name>.<random>.mp3"
+# — covered by the audio patterns above) and other scratch files
+*.tmp
+*.bak
+*~
+
+# ---------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---------------------------------------------------------------
+# macOS
+# ---------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Icon?
+.Spotlight-V100
+.Trashes
+
+# ---------------------------------------------------------------
+# Editors / IDEs
+# ---------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
