@@ -183,6 +183,25 @@ LASTFM_API_KEY=your_key python3 make_playlist.py --smart-list "Radiohead - Creep
 python3 make_playlist.py --smart-list "Daft Punk - One More Time"   # no key: genre-based fallback
 ```
 
+### Songs Last.fm suggests that you don't have
+
+Both Last.fm modes print a summary of the songs Last.fm returned that aren't in your library, ranked by their position in the Last.fm results (the top 20 on screen). The full list is saved in the library folder so you can use it as a shopping list:
+
+- `--smart-list` saves one file per seed song, e.g. `lastfm_not_found - Nirvana - Come As You Are.log`. Reports for different songs are kept side by side; running the same song again replaces its report.
+- `--lastfm` saves `lastfm_not_found.log`, replaced on each run.
+
+- `--smart-list` checks **every** similar song Last.fm returns (up to 250).
+- `--lastfm` checks chart positions only until the playlist is full, so the list covers the chart down to the last song used.
+
+```text
+Last.fm songs similar to 'Nirvana - Come As You Are': 250 songs checked, 31 in your library, 219 not found.
+Songs not in your library (Last.fm rank):
+   2. Bush - Glycerine
+   5. Mudhoney - Touch Me I'm Sick
+   ...
+Full list saved to: /…/Music Library/lastfm_not_found - Nirvana - Come As You Are.log
+```
+
 ### Options
 
 | Option | Description |

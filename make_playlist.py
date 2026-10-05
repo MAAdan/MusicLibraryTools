@@ -30,6 +30,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT = SCRIPT_DIR.parent if SCRIPT_DIR.name.casefold() == "scripts" else SCRIPT_DIR
 OUTPUT_DIR = ROOT / "Playlists"
 UNREADABLE_TAG_LOG = ROOT / "no_readable_tag_error.log"
+NOT_FOUND_LOG = ROOT / "lastfm_not_found.log"  # --lastfm chart mode
+# --smart-list writes one report per seed song: "lastfm_not_found - Artist - Title.log"
+NOT_FOUND_SHOWN = 20  # songs listed on screen; the log file has all of them
 MIN_TRACKS = 18
 MAX_TRACKS = 25
 LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
@@ -439,6 +442,34 @@ def write_playlist(title: str, tracks: list[Path], output_dir: Path) -> Path:
     return output
 
 
+def report_not_found(
+    source: str, checked: int, missing: list[tuple[int, str, str]], log_path: Path = NOT_FOUND_LOG
+) -> None:
+    """Summarise Last.fm songs that are not in the library.
+
+    missing holds (Last.fm rank, artist, title). The top songs are printed and
+    the complete list is written to log_path (replaced on every run).
+    """
+    found = checked - len(missing)
+    print(f"\nLast.fm {source}: {checked} songs checked, {found} in your library, {len(missing)} not found.")
+    if not missing:
+        log_path.unlink(missing_ok=True)
+        return
+    width = len(str(missing[-1][0]))
+    lines = [f"{rank:>{width}}. {artist} - {title}" for rank, artist, title in missing]
+    print(f"Songs not in your library (Last.fm rank):")
+    for line in lines[:NOT_FOUND_SHOWN]:
+        print(f"  {line}")
+    if len(lines) > NOT_FOUND_SHOWN:
+        print(f"  ... and {len(lines) - NOT_FOUND_SHOWN} more.")
+    log_path.write_text(
+        f"Last.fm {source}: songs not found in the library ({len(missing)} of {checked} checked)\n"
+        "Rank is the song's position in the Last.fm results.\n\n" + "\n".join(lines) + "\n",
+        encoding="utf-8",
+    )
+    print(f"Full list saved to: {log_path}")
+
+
 def create_lastfm_playlist(candidates: list[Path], count: int, output_dir: Path) -> None:
     api_key = os.environ.get("LASTFM_API_KEY")
     if not api_key:
@@ -448,13 +479,21 @@ def create_lastfm_playlist(candidates: list[Path], count: int, output_dir: Path)
 
     chart = lastfm_global_tracks(api_key, count)
     matched: list[Path] = []
-    for entry in chart:
+    missing: list[tuple[int, str, str]] = []
+    checked = 0
+    for rank, entry in enumerate(chart, start=1):
+        checked = rank
         local = match_chart_track(entry["artist"], entry["title"], candidates)
-        if local is not None and local not in matched:
+        if local is None:
+            missing.append((rank, entry["artist"], entry["title"]))
+        elif local not in matched:
             matched.append(local)
         if len(matched) >= count:
             break
 
+    # Only chart positions up to the last song needed are checked.
+    report_not_found("global chart", checked, missing)
+    print()
     if not matched:
         raise SystemExit(
             "No Last.fm global chart tracks matched local filenames. The matcher expects names like 'Artist - Title.mp3'."
@@ -724,15 +763,23 @@ def create_smart_playlist(song: str, candidates: list[Path], library: Path, coun
         return True
 
     api_key = os.environ.get("LASTFM_API_KEY")
+    not_found: list[tuple[int, str, str]] = []
+    similar: list[tuple[str, str]] = []
     if api_key:
         # 1) Songs Last.fm lists as similar to the seed, in similarity order.
+        # Every returned song is checked (the index makes this fast), so the
+        # not-found summary covers the full Last.fm list, not just the top.
         try:
-            for artist, title in lastfm_similar_tracks(api_key, seed_artist, seed_title):
-                add(index.find(artist, title), "Last.fm similar tracks")
-                if len(chosen) >= count:
-                    break
+            similar = lastfm_similar_tracks(api_key, seed_artist, seed_title)
         except LastfmError as error:
             print(f"Last.fm similar tracks unavailable ({error}).")
+            similar = []
+        for rank, (artist, title) in enumerate(similar, start=1):
+            local = index.find(artist, title)
+            if local is None:
+                not_found.append((rank, artist, title))
+            else:
+                add(local, "Last.fm similar tracks")
 
         # 2) Fill up with songs by similar artists (and a few by the seed artist).
         if len(chosen) < count:
@@ -759,10 +806,21 @@ def create_smart_playlist(song: str, candidates: list[Path], library: Path, coun
             if len(chosen) >= count:
                 break
 
+    # Seed name made safe for file names (used by the report and the playlist).
+    safe_name = re.sub(r'[\\/:*?"<>|]+', "-", f"{seed_artist} - {seed_title}")
+
+    if api_key and similar:
+        report_not_found(
+            f"songs similar to '{seed_artist} - {seed_title}'",
+            len(similar),
+            not_found,
+            ROOT / f"lastfm_not_found - {safe_name}.log",
+        )
+        print()
+
     if len(chosen) < 2:
         raise SystemExit("No similar songs were found in the selected library folder.")
 
-    safe_name = re.sub(r'[\\/:*?"<>|]+', "-", f"{seed_artist} - {seed_title}")
     title = f"Smart Mix — Songs Like {safe_name}"
     output = write_playlist(title, [track.path for track in chosen], output_dir)
     print(f"Created: {output}")
