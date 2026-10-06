@@ -10,8 +10,7 @@ All scripts need **Python 3.10+** and use only the standard library. Some also n
 | [`rename_mp3_by_metadata.py`](#rename_mp3_by_metadatapy) | Rename MP3/FLAC files to `Artist - NN Title` from their tags | Renames files, may write tags | — |
 | [`normalize_genres.py`](#normalize_genrespy) | Turn multi-genre tags like `Rock / Pop` into `Rock,Pop` | Rewrites tags (asks first) | FFmpeg + FFprobe |
 | [`set_genre_from_list.py`](#set_genre_from_listpy) | Set one genre on every MP3 in a list | Rewrites tags | FFmpeg + FFprobe |
-| [`create_m3u_playlists.py`](#create_m3u_playlistspy) | One `.m3u` playlist per album/folder | Creates playlists | — |
-| [`make_playlist.py`](#make_playlistpy) | Genre mix, Last.fm chart mix, or "songs like this" smart mix | Creates playlists | Last.fm API key (optional) |
+| [`make_playlist.py`](#make_playlistpy) | Genre mix, Last.fm chart mix, "songs like this" smart mix, all songs by an artist, or one `.m3u` per album/folder | Creates playlists | Last.fm API key (optional) |
 
 A typical workflow for new music: **convert** FLACs → **rename** files from their tags → **normalise / set genres** → **build playlists**.
 
@@ -113,35 +112,13 @@ Each file is probed with FFprobe and then stream-copied with FFmpeg (no re-encod
 
 ---
 
-## `create_m3u_playlists.py`
-
-Walks a music collection recursively and creates one `.m3u` playlist for every folder that directly contains MP3 or FLAC files. Each playlist is named after its folder, lists the files in alphabetical order and uses relative paths. Existing playlists with the same name are overwritten (reported as `UPDATE`).
-
-```text
-/Music/Album/Album.m3u
-```
-
-```bash
-python3 create_m3u_playlists.py "/path/to/music"                                   # playlist inside each folder
-python3 create_m3u_playlists.py "/path/to/music" --output-path "/path/to/playlists" # all playlists in one folder
-python3 create_m3u_playlists.py "/path/to/music" --dryrun                          # preview
-```
-
-| Option | Description |
-|---|---|
-| `path` | Root of the music collection (required). |
-| `--output-path DIR` | Put all playlists in this folder; entries then point back to the music with relative paths. |
-| `--dryrun` | List the playlists and tracks that would be written without creating files. |
-
----
-
 ## `make_playlist.py`
 
-Creates a new `.m3u8` playlist from the library and saves it in `Playlists/`, numbered after the playlists already there (e.g. `11 Smart Mix — Songs Like Nirvana - Come As You Are.m3u8`). Entries use paths relative to the playlist, and duplicate copies of a song across compilations are collapsed.
+Builds playlists from the library. Modes 1–4 create a new `.m3u8` playlist and saves it in `Playlists/`, numbered after the playlists already there (e.g. `11 Smart Mix — Songs Like Nirvana - Come As You Are.m3u8`). Entries use paths relative to the playlist, and duplicate copies of a song across compilations are collapsed.
 
 When run without `--input-path`, it uses the whole Music Library (the folder above `scripts/`). Relative `--input-path` / `--output-path` values are relative to the library folder.
 
-It has three modes:
+It has five modes:
 
 ### 1. Genre mix (default)
 
@@ -183,6 +160,35 @@ LASTFM_API_KEY=your_key python3 make_playlist.py --smart-list "Radiohead - Creep
 python3 make_playlist.py --smart-list "Daft Punk - One More Time"   # no key: genre-based fallback
 ```
 
+### 4. Artist list: every song by one artist (`--artist NAME`)
+
+Builds a playlist with all the songs by `NAME` in the library, named e.g. `25 Counting Crows — All Songs.m3u8`. Albums come first in track order, followed by the compilations.
+
+- Matching uses the `Artist - Title` file names and ignores case, accents and spacing (`linkin park` finds `Linkin Park`, `Linkin park` and `LinkinPark`); small typos are tolerated.
+- Files whose name has no artist (e.g. `01. Mr. Blue Sky.mp3` in a compilation) are matched using their Artist and Title tags instead.
+- A leading `The`, `Los`, `Las`, `El`, `La` or `Les` is ignored when comparing artists (`The Kinks` finds `Kinks`, `Ramones` finds `Los Ramones`), and version notes such as `(Live)`, `(Remaster)` or `(Edit)` are ignored in titles.
+- Collaborations are included (`Artist & Other`, `Artist feat. Other`).
+- The same song in several folders is added only once.
+- No Last.fm key is needed, and `--count` is ignored: every song is included.
+- If nothing matches, the closest artist names in the library are suggested.
+
+```bash
+python3 make_playlist.py --artist "Counting Crows"
+python3 make_playlist.py --artist "Bon Jovi" --input-path "000 Albums"
+```
+
+### 5. One playlist per folder (`--by-folder-structure`)
+
+Walks the library (or `--input-path`) recursively and creates one `.m3u` playlist for every folder that directly contains MP3 or FLAC files. Each playlist is named after its folder, lists the files in alphabetical order and uses relative paths. Existing playlists with the same name are overwritten (reported as `UPDATE`). This mode replaces the old `create_m3u_playlists.py`.
+
+All playlists are saved in the folder given with `--output-path`, which is **required** in this mode (the script stops with an error without it). Entries point back to the music with relative paths.
+
+```bash
+python3 make_playlist.py --by-folder-structure --output-path "Playlists/Folders"                            # whole library
+python3 make_playlist.py --by-folder-structure --output-path "Playlists/Folders" --input-path "000 Albums"  # only the albums
+python3 make_playlist.py --by-folder-structure --output-path "Playlists/Folders" --dryrun                  # preview, writes nothing
+```
+
 ### Songs Last.fm suggests that you don't have
 
 Both Last.fm modes print a summary of the songs Last.fm returned that aren't in your library, ranked by their position in the Last.fm results (the top 20 on screen). The full list is saved in the library folder so you can use it as a shopping list:
@@ -207,10 +213,15 @@ Full list saved to: /…/Music Library/lastfm_not_found - Nirvana - Come As You 
 | Option | Description |
 |---|---|
 | `--input-path FOLDER` | Use only this part of the library. |
-| `--output-path FOLDER` | Save the playlist here instead of `Playlists/`. |
+| `--output-path FOLDER` | Save the playlist here instead of `Playlists/`. Required with `--by-folder-structure`. |
 | `--lastfm` | Last.fm global chart mode. |
 | `--smart-list SONG` | Similar-songs mode. Cannot be combined with `--lastfm`. |
+| `--artist NAME` | All songs by one artist. |
+| `--by-folder-structure` | One `.m3u` per folder with MP3/FLAC files, all saved in `--output-path`. |
+| `--dryrun` | With `--by-folder-structure` only: list the playlists and tracks that would be written, without writing. |
 | `--count N` | Number of tracks for `--lastfm` and `--smart-list` (default 25). |
+
+`--lastfm`, `--smart-list`, `--artist` and `--by-folder-structure` can't be combined with each other.
 
 ### Notes
 

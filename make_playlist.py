@@ -8,6 +8,9 @@ Modes:
   (default)            random tracks from one genre family
   --lastfm             Last.fm global chart tracks found in the library
   --smart-list SONG    tracks similar to SONG (Last.fm track/artist similarity)
+  --artist NAME        every song by NAME in the library
+  --by-folder-structure  one .m3u per folder that directly holds MP3/FLAC files
+                         (requires --output-path)
 """
 
 from __future__ import annotations
@@ -353,8 +356,8 @@ def clean_match_text(value: str) -> str:
     """Normalize artist/title text and discard common release-version notes."""
     value = unicodedata.normalize("NFKD", value)
     value = "".join(char for char in value if not unicodedata.combining(char))
-    value = re.sub(r"\s*\((?:[^)]*(?:remaster|remastered|radio edit|single version|album version|live|explicit|clean)[^)]*)\)\s*$", "", value, flags=re.I)
-    value = re.sub(r"\s*\[(?:[^]]*(?:remaster|remastered|radio edit|single version|album version|live|explicit|clean)[^]]*)\]\s*$", "", value, flags=re.I)
+    value = re.sub(r"\s*\((?:[^)]*(?:remaster|remastered|edit|single version|album version|live|explicit|clean)[^)]*)\)\s*$", "", value, flags=re.I)
+    value = re.sub(r"\s*\[(?:[^]]*(?:remaster|remastered|edit|single version|album version|live|explicit|clean)[^]]*)\]\s*$", "", value, flags=re.I)
     return re.sub(r"[^a-z0-9]+", "", value.casefold())
 
 
@@ -555,12 +558,19 @@ VERSION_SUFFIX = re.compile(
 )
 LEADING_TRACK_NUMBER = re.compile(r"^\s*\d{1,3}\s*[.\-_]\s*")
 TITLE_TRACK_NUMBER = re.compile(r"^\s*\d{1,3}[.\s_-]+")
+# 'The Kinks' vs 'Kinks', 'Los Ramones' vs 'Ramones': compare artists without a leading article.
+LEADING_ARTICLE = re.compile(r"^\s*(?:the|los|las|el|la|les)\s+(?=\S)", re.I)
 ARTIST_SEPARATORS = re.compile(r"\s*(?:&|,|\+|\band\b|\bfeat\.?|\bft\.?|\bfeaturing\b|\bvs\.?|\bx\b|\bwith\b)\s*", re.I)
 
 
 def smart_clean(value: str) -> str:
     """clean_match_text plus removal of ' - 2011 Remaster' style suffixes."""
     return clean_match_text(VERSION_SUFFIX.sub("", value))
+
+
+def artist_match_key(artist: str) -> str:
+    """smart_clean for artist names, ignoring a leading 'The', 'Los', 'La'..."""
+    return smart_clean(LEADING_ARTICLE.sub("", artist)) or smart_clean(artist)
 
 
 def display_title(title: str) -> str:
@@ -584,6 +594,38 @@ def raw_artist_title(track: Path) -> tuple[str, str] | None:
     return None
 
 
+def tag_artist_title(track: Path) -> tuple[str, str] | None:
+    """Read Artist and Title from the file's tags (MP3 ID3v2/ID3v1, FLAC Vorbis
+    comments via rename_mp3_by_metadata.py; other formats via Mutagen if installed)."""
+    tags: dict[str, str] = {}
+    try:
+        from rename_mp3_by_metadata import audio_metadata
+
+        tags = audio_metadata(track)
+    except Exception:
+        tags = {}
+    if not (tags.get("artist") and tags.get("title")):
+        try:
+            from mutagen import File as MutagenFile
+
+            audio = MutagenFile(track, easy=True)
+            if audio and audio.tags:
+                for field in ("artist", "title"):
+                    values = audio.tags.get(field)
+                    if values and not tags.get(field):
+                        tags[field] = str(values[0] if isinstance(values, list) else values)
+        except Exception:
+            pass
+    artist, title = (tags.get("artist") or "").strip(), (tags.get("title") or "").strip()
+    return (artist, title) if artist and title else None
+
+
+def track_artist_title(track: Path) -> tuple[str, str] | None:
+    """'Artist - Title' from the file name, or from the tags when the name has no artist
+    (e.g. '01. Mr. Blue Sky.mp3' or '18-Hold On-MaRJuaNa.mp3')."""
+    return raw_artist_title(track) or tag_artist_title(track)
+
+
 class LocalTrack:
     def __init__(self, path: Path, artist: str, title: str) -> None:
         self.path = path
@@ -593,9 +635,9 @@ class LocalTrack:
         no_number = TITLE_TRACK_NUMBER.sub("", title).strip() or title
         self.title = no_number
         self.title_keys = {key for key in (smart_clean(title), smart_clean(no_number)) if key}
-        self.artist_key = smart_clean(artist)
+        self.artist_key = artist_match_key(artist)
         self.artist_keys = {self.artist_key} | {
-            smart_clean(part) for part in ARTIST_SEPARATORS.split(artist) if smart_clean(part)
+            artist_match_key(part) for part in ARTIST_SEPARATORS.split(artist) if artist_match_key(part)
         }
         self.song_key = (self.artist_key, smart_clean(no_number))
 
@@ -607,7 +649,7 @@ class LibraryIndex:
         self.tracks: list[LocalTrack] = []
         self.by_artist: dict[str, list[LocalTrack]] = {}
         for path in tracks:
-            parsed = raw_artist_title(path)
+            parsed = track_artist_title(path)
             if not parsed:
                 continue
             local = LocalTrack(path, *parsed)
@@ -618,7 +660,7 @@ class LibraryIndex:
                 self.by_artist.setdefault(key, []).append(local)
 
     def artist_tracks(self, artist: str) -> list[LocalTrack]:
-        wanted = smart_clean(artist)
+        wanted = artist_match_key(artist)
         if not wanted:
             return []
         if wanted in self.by_artist:
@@ -675,9 +717,9 @@ def resolve_seed(song: str, index: LibraryIndex, library: Path) -> LocalTrack:
             for track in index.tracks:
                 if track.path == candidate:
                     return track
-            parsed = raw_artist_title(candidate)
+            parsed = track_artist_title(candidate)
             if not parsed:
-                raise SystemExit(f"Cannot read 'Artist - Title' from the filename: {candidate.name}")
+                raise SystemExit(f"Cannot read 'Artist - Title' from the filename or tags: {candidate.name}")
             return LocalTrack(candidate, *parsed)
 
     ranked = index.find_by_text(Path(song).stem if Path(song).suffix.casefold() in SUPPORTED_AUDIO else song)
@@ -832,6 +874,107 @@ def create_smart_playlist(song: str, candidates: list[Path], library: Path, coun
         print(f"Only {len(chosen)} of the requested {count} tracks could be found in the library.")
 
 
+# ---------------------------------------------------------------------------
+# Artist list: every song by one artist in the library
+# ---------------------------------------------------------------------------
+
+def create_artist_playlist(artist: str, candidates: list[Path], output_dir: Path) -> None:
+    """Build a playlist with all of the artist's songs found in the library.
+
+    Artists are matched on the 'Artist - Title' file names (or the tags when the
+    name has no artist), ignoring a leading 'The'/'Los'..., and including
+    collaborations ('Artist & Other', 'Artist feat. Other'). Copies of the same
+    song in several folders are included only once.
+    """
+    index = LibraryIndex(candidates)
+    tracks = index.artist_tracks(artist)
+    if not tracks:
+        wanted = artist_match_key(artist)
+        names: dict[str, str] = {}
+        for track in index.tracks:
+            names.setdefault(track.artist_key, track.artist)
+        close = difflib.get_close_matches(wanted, list(names), n=5, cutoff=0.6)
+        hint = "\n".join(f"  {names[key]}" for key in close)
+        raise SystemExit(
+            f"No songs by '{artist}' were found in the library."
+            + (f" Closest artists:\n{hint}" if hint else "")
+            + "\nThe matcher expects file names like 'Artist - Title.mp3'."
+        )
+
+    # Albums come first in track order, then the compilations.
+    tracks.sort(key=lambda track: str(track.path).casefold())
+    chosen: list[LocalTrack] = []
+    used_songs: set[tuple[str, str]] = set()
+    for track in tracks:
+        if track.song_key in used_songs:
+            continue
+        used_songs.add(track.song_key)
+        chosen.append(track)
+
+    matched_names = sorted({track.artist for track in chosen}, key=str.casefold)
+    # Name the playlist after the most common solo spelling ('Linkin Park'
+    # rather than 'Linkin park' or 'Linkin Park & Jay-Z').
+    solo = [track.artist for track in chosen if len(ARTIST_SEPARATORS.split(track.artist)) == 1]
+    spellings = solo or [track.artist for track in chosen]
+    display_name = max(
+        set(spellings),
+        key=lambda name: (spellings.count(name), " " in name, sum(word[:1].isupper() for word in name.split())),
+    )
+    safe_name = re.sub(r'[\\/:*?"<>|]+', "-", display_name)
+    title = f"{safe_name} — All Songs"
+    output = write_playlist(title, [track.path for track in chosen], output_dir)
+    print(f"Created: {output}")
+    print(f"Tracks: {len(chosen)}")
+    if len(tracks) > len(chosen):
+        print(f"Skipped {len(tracks) - len(chosen)} duplicate copies of the same songs.")
+    if len(matched_names) > 1:
+        print("Artist names matched: " + ", ".join(matched_names))
+
+
+# ---------------------------------------------------------------------------
+# Folder playlists: one .m3u per folder holding MP3 or FLAC files
+# (formerly create_m3u_playlists.py)
+# ---------------------------------------------------------------------------
+
+FOLDER_PLAYLIST_EXTENSIONS = {".mp3", ".flac"}
+
+
+def folder_music_files(folder: Path) -> list[Path]:
+    """Return the sorted MP3/FLAC files stored directly in folder (no symlinks)."""
+    return sorted(
+        path for path in folder.iterdir()
+        if path.is_file() and not path.is_symlink() and path.suffix.lower() in FOLDER_PLAYLIST_EXTENSIONS
+    )
+
+
+def create_folder_playlists(collection: Path, output_dir: Path, dryrun: bool) -> None:
+    """Create '<output_dir>/<folder>.m3u' for every folder with music files.
+
+    Playlists point back to the music with relative paths. Existing playlists
+    with the same name are overwritten.
+    """
+    folders = [collection, *sorted(path for path in collection.rglob("*") if path.is_dir())]
+    actions = 0
+    for folder in folders:
+        music_files = folder_music_files(folder)
+        if not music_files:
+            continue
+        playlist = output_dir / f"{folder.name}.m3u"
+        action = "UPDATE" if playlist.exists() else "CREATE"
+        actions += 1
+        if dryrun:
+            print(f"DRYRUN {action}: {playlist}")
+            for music_file in music_files:
+                print(f"  ADD: {music_file.name}")
+            continue
+        playlist.parent.mkdir(parents=True, exist_ok=True)
+        lines = [os.path.relpath(path, playlist.parent) for path in music_files]
+        playlist.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"{action}D: {playlist} ({len(music_files)} files)")
+    if actions == 0:
+        print(f"No folders with MP3 or FLAC files found in {collection}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="make_playlist.py",
@@ -839,8 +982,10 @@ def main() -> None:
             "Create an M3U8 playlist from your local music library. By default, "
             "the script randomly selects 18–25 tracks from one genre family using "
             "embedded genre tags. Add --lastfm to use Last.fm's global chart and "
-            "include chart songs found in your files, or --smart-list SONG to build "
-            "a playlist of songs similar to SONG."
+            "include chart songs found in your files, --smart-list SONG to build "
+            "a playlist of songs similar to SONG, --artist NAME to collect every "
+            "song by one artist, or --by-folder-structure to create one .m3u "
+            "playlist per album/folder."
         ),
         epilog=(
             "Examples:\n"
@@ -850,7 +995,12 @@ def main() -> None:
             "  LASTFM_API_KEY=your_key python3 make_playlist.py --lastfm\n"
             "  LASTFM_API_KEY=your_key python3 make_playlist.py --lastfm --count 40 --input-path \"001 VA - Pop Songs\"\n"
             "  LASTFM_API_KEY=your_key python3 make_playlist.py --smart-list \"Nirvana - Come As You Are\"\n"
-            "  LASTFM_API_KEY=your_key python3 make_playlist.py --smart-list \"002 VA - Rock Songs/ACDC - Highway to Hell.mp3\" --count 30\n\n"
+            "  LASTFM_API_KEY=your_key python3 make_playlist.py --smart-list \"002 VA - Rock Songs/ACDC - Highway to Hell.mp3\" --count 30\n"
+            "  python3 make_playlist.py --artist \"Counting Crows\"\n"
+            "  python3 make_playlist.py --by-folder-structure --output-path \"Playlists/Folders\" --input-path \"000 Albums\" --dryrun\n\n"
+            "--by-folder-structure writes '<output-path>/<folder>.m3u' for every folder that directly "
+            "contains MP3 or FLAC files (alphabetical, relative paths), overwriting existing ones. "
+            "It requires --output-path.\n"
             "--smart-list accepts 'Artist - Title', just a title, or a path to the audio file. It uses "
             "Last.fm similar tracks first, then songs by similar artists; without an API key it "
             "falls back to songs from the same genre family.\n"
@@ -866,7 +1016,10 @@ def main() -> None:
     parser.add_argument(
         "--output-path",
         type=Path,
-        help="Folder where the playlist will be saved. Relative paths are from the library folder.",
+        help=(
+            "Folder where the playlist will be saved. Relative paths are from the library folder. "
+            "Default: Playlists/. Required with --by-folder-structure."
+        ),
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
@@ -879,6 +1032,21 @@ def main() -> None:
         metavar="SONG",
         help="Build a playlist of songs similar to SONG ('Artist - Title' or a path to a file in the library).",
     )
+    mode.add_argument(
+        "--artist",
+        metavar="NAME",
+        help="Build a playlist with every song by NAME in the library (including collaborations).",
+    )
+    mode.add_argument(
+        "--by-folder-structure",
+        action="store_true",
+        help="Create one .m3u playlist per folder that directly contains MP3 or FLAC files, saved in --output-path (required).",
+    )
+    parser.add_argument(
+        "--dryrun",
+        action="store_true",
+        help="With --by-folder-structure: list the playlists and tracks that would be written, without writing.",
+    )
     parser.add_argument(
         "--count",
         type=int,
@@ -886,6 +1054,10 @@ def main() -> None:
         help="Number of tracks for --lastfm and --smart-list (default: 25).",
     )
     args = parser.parse_args()
+    if args.dryrun and not args.by_folder_structure:
+        parser.error("--dryrun can only be used with --by-folder-structure")
+    if args.by_folder_structure and not args.output_path:
+        parser.error("--by-folder-structure requires --output-path (the folder where the playlists will be saved)")
 
     library = args.input_path if args.input_path and args.input_path.is_absolute() else ROOT / args.input_path if args.input_path else ROOT
     library = library.expanduser().resolve()
@@ -894,6 +1066,11 @@ def main() -> None:
 
     output_dir = args.output_path if args.output_path and args.output_path.is_absolute() else ROOT / args.output_path if args.output_path else OUTPUT_DIR
     output_dir = output_dir.expanduser().resolve()
+
+    if args.by_folder_structure:
+        create_folder_playlists(library, output_dir, args.dryrun)
+        return
+
     output_dir.mkdir(parents=True, exist_ok=True)
     candidates = library_tracks(library)
     if not candidates:
@@ -903,6 +1080,9 @@ def main() -> None:
 
     if (args.lastfm or args.smart_list) and args.count < 1:
         raise SystemExit("--count must be at least 1.")
+    if args.artist:
+        create_artist_playlist(args.artist, candidates, output_dir)
+        return
     if args.smart_list:
         create_smart_playlist(args.smart_list, candidates, library, args.count, output_dir)
         return
