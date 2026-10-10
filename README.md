@@ -11,6 +11,7 @@ All scripts need **Python 3.10+** and use only the standard library. Some also n
 | [`normalize_genres.py`](#normalize_genrespy) | Turn multi-genre tags like `Rock / Pop` into `Rock,Pop` | Rewrites tags (asks first) | FFmpeg + FFprobe |
 | [`set_genre_from_list.py`](#set_genre_from_listpy) | Set one genre on every MP3 in a list | Rewrites tags | FFmpeg + FFprobe |
 | [`make_playlist.py`](#make_playlistpy) | Genre mix, Last.fm chart mix, "songs like this" smart mix, all songs by an artist, or one `.m3u` per album/folder | Creates playlists | Last.fm API key (optional) |
+| [`find_duplicate_songs.py`](#find_duplicate_songspy) | List songs that appear more than once in the library | No (report only) | — |
 
 A typical workflow for new music: **convert** FLACs → **rename** files from their tags → **normalise / set genres** → **build playlists**.
 
@@ -47,7 +48,7 @@ Prints a summary (`converted / skipped / failed`) and exits with code 1 if any c
 
 ## `rename_mp3_by_metadata.py`
 
-Renames the MP3 and FLAC files in **one folder** (not recursive) using their Artist, Title and track-number tags:
+Renames the MP3 and FLAC files in a folder **and all its subfolders** (each file stays where it is) using their Artist, Title and track-number tags:
 
 ```text
 Artist Name - 01 Song name.mp3      # when a track number is present
@@ -63,7 +64,7 @@ python3 rename_mp3_by_metadata.py "/path/to/album"            # rename
 
 | Option | Description |
 |---|---|
-| `directory` | Folder containing the files to rename (required). |
+| `directory` | Folder containing the files to rename, searched recursively (required). |
 | `--dryrun` | Show the new names (and any tag updates) without changing files. |
 
 **Missing tags:** if a file has no Artist or Title, the script asks you to type the correct file name (press Enter to keep the current one). If you type a name like `Alex Warren - Ordinary`, the Artist and Song are also written back into the file's tags.
@@ -228,3 +229,31 @@ Full list saved to: /…/Music Library/lastfm_not_found - Nirvana - Come As You 
 - **Last.fm API key:** create a free one at <https://www.last.fm/api/account/create> and pass it in the `LASTFM_API_KEY` environment variable. To avoid typing it each time, add `export LASTFM_API_KEY=your_key` to `~/.zshrc`.
 - **File naming:** Last.fm results are matched to local files by name, so files should follow the `Artist - Title` pattern. Leading numbers such as `001. Artist - Title` work in both Last.fm modes. Album-style names (`Artist - 02 Title`) are currently matched only by `--smart-list`. Run `rename_mp3_by_metadata.py` first on badly named folders.
 - **Genres:** MP3 genre tags are read without extra packages. Installing Mutagen (`pip3 install mutagen`) also enables genre reading for other formats.
+
+---
+
+## `find_duplicate_songs.py`
+
+Scans the whole library (skipping `Playlists`, `scripts` and `tmp`) and lists every song that appears more than once. The report goes to **stdout**, so you can save it with `>`; progress messages go to stderr and stay out of the file. Nothing in the library is changed.
+
+```bash
+python3 find_duplicate_songs.py                       # show the report
+python3 find_duplicate_songs.py > duplicates.log      # save it
+python3 find_duplicate_songs.py --ignore-versions     # also merge live / remix / acoustic versions
+```
+
+Songs are matched by **artist + title**, read from the file name (`Artist - Title`, `Artist - 01 Title`, `001. Artist - Title`, `01 - Artist - Title`) or, when the name has no artist, from the tags. Matching ignores case, accents, punctuation, track numbers, a leading "The", artist order (`A & B` = `B & A`) and release notes such as `(2011 Remaster)`, `(Radio Edit)`, `(Single Version)` or `(Bonus Track)`. Featured artists count as artists, so `A - Song (feat. B)` matches `A & B - Song`.
+
+Live, remix, acoustic, demo and instrumental versions are kept apart from the studio version. Tracks inside a live album folder (`MTV Unplugged`, `Live On Ten Legs`) count as live even when the file name doesn't say so.
+
+For each duplicated song the report lists every copy with its size, and marks copies that are byte-for-byte **identical**. The header shows how many extra copies there are and how much space they use. Two extra sections come at the end:
+
+- **Same name twice in one album**: usually different tracks whose names and tags are incomplete (e.g. three `Another Brick in the Wall Part` files with no part number). Worth fixing the names.
+- **Files not checked**: files with no `Artist - Title` in either the name or the tags.
+
+| Option | Description |
+|---|---|
+| `library` | Folder to scan (default: the library containing `scripts`). |
+| `--exclude FOLDER` | Top-level folder to skip; repeat for several. Replaces the default list. |
+| `--ignore-versions` | Treat live, remix, acoustic, demo… versions as the same song. |
+| `--no-hash` | Skip the byte-identical check (faster). |

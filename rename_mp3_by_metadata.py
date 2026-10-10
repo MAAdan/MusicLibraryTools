@@ -8,6 +8,8 @@ Filename format when a track number is available:
 
 Files without a track number use: Artist Name - Song name.ext
 
+The given folder is searched recursively, so files in subfolders are renamed
+too (each file stays in its own folder).
 Files that are not MP3 or FLAC files are ignored.
 When there is not enough metadata, the script asks for the right file name.
 Only manually provided names are used to write Artist and Song metadata.
@@ -631,7 +633,7 @@ def rename_audio_files(directory: Path, dryrun: bool) -> None:
     if not directory.is_dir():
         raise NotADirectoryError(f"Path is not a directory: {directory}")
 
-    files = sorted(path for path in directory.iterdir() if is_audio_file(path))
+    files = sorted(path for path in directory.rglob("*") if is_audio_file(path))
 
     if not files:
         print(f"No MP3 or FLAC files found in {directory}")
@@ -646,11 +648,11 @@ def rename_audio_files(directory: Path, dryrun: bool) -> None:
         if manual_metadata_to_write:
             artist, title = manual_metadata_to_write
             if dryrun:
-                print(f"DRYRUN METADATA: {path.name} -> Artist: {artist}, Song: {title}")
+                print(f"DRYRUN METADATA: {path.relative_to(directory)} -> Artist: {artist}, Song: {title}")
             else:
                 try:
                     write_artist_title_metadata(path, artist, title)
-                    print(f"UPDATED METADATA: {path.name} -> Artist: {artist}, Song: {title}")
+                    print(f"UPDATED METADATA: {path.relative_to(directory)} -> Artist: {artist}, Song: {title}")
                 except (OSError, ValueError) as error:
                     print(f"METADATA NOT UPDATED: {error}", file=sys.stderr)
 
@@ -659,7 +661,7 @@ def rename_audio_files(directory: Path, dryrun: bool) -> None:
             continue
 
         if dryrun:
-            print(f"DRYRUN: {path.name} -> {target.name}")
+            print(f"DRYRUN: {path.relative_to(directory)} -> {target.name}")
         else:
             path.rename(target)
             print(f"RENAMED: {path} -> {target.name}")
@@ -672,7 +674,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "directory",
         type=Path,
-        help="Directory containing the MP3 or FLAC files to rename.",
+        help="Directory containing the MP3 or FLAC files to rename (searched recursively).",
     )
     parser.add_argument(
         "--dryrun",
